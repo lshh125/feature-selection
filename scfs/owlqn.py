@@ -260,8 +260,8 @@ class OWLQN(Optimizer):
             else:
                 view = p.grad.view(-1)
             
+            # SL: find psuedo-gradient
             view = view.clone()
-
             border_case = (p == 0.).reshape(-1)
             go_left = (view > lasso)
             go_right = (view < -lasso)
@@ -269,7 +269,6 @@ class OWLQN(Optimizer):
             view[go_left & border_case] -= lasso
             view[go_right & border_case] += lasso
             view[stay & border_case] = 0.
-
             view[(p > 0.).reshape(-1)] += lasso
             view[(p < 0.).reshape(-1)] -= lasso
 
@@ -282,9 +281,9 @@ class OWLQN(Optimizer):
         for p in self._params:
             numel = p.numel()
             # view as to avoid deprecated pointwise semantics
-            sign0 = torch.sign(p) # SL
+            sign0 = torch.sign(p) # SL: get sign before update
             p.add_(update[offset:offset + numel].view_as(p), alpha=step_size)
-            p[sign0 != torch.sign(p)] = 0. # SL
+            p[sign0 != torch.sign(p)] = 0. # SL: project to 0 if sign changed
             offset += numel
         assert offset == self._numel()
 
@@ -336,11 +335,11 @@ class OWLQN(Optimizer):
         state.setdefault('n_iter', 0)
 
         # evaluate initial f(x) and df/dx
-        l1 = 0.
-        for p in self._params:
-            l1 = l1 + torch.norm(p, 1)
-        l1 = l1 * self.param_groups[0]['lasso']
-        orig_loss = closure() + l1
+        l1 = 0. # SL: Add the L1 regularization
+        for p in self._params: # SL: ..
+            l1 = l1 + torch.norm(p, 1) # SL: ..
+        l1 = l1 * self.param_groups[0]['lasso'] # SL: ..
+        orig_loss = closure() + l1 # SL: ..
         loss = float(orig_loss)
         current_evals = 1
         state['func_evals'] += 1
@@ -465,8 +464,13 @@ class OWLQN(Optimizer):
                     # re-evaluate function only if not in last iteration
                     # the reason we do this: in a stochastic setting,
                     # no use to re-evaluate that function here
+                    l1 = 0. # SL: ..
+                    for p in self._params: # SL:
+                    l1 = l1 + torch.norm(p, 1) # SL:
+                    l1 = l1 * self.param_groups[0]['lasso'] # SL:
                     with torch.enable_grad():
                         loss = float(closure())
+                    loss += l1 # SL:
                     flat_grad = self._gather_flat_grad()
                     opt_cond = flat_grad.abs().max() <= tolerance_grad
                     ls_func_evals = 1
