@@ -29,7 +29,7 @@ class Fspsn:
         self.l1 = l1
         self.eps = eps
 
-    def fit(self, X, w0 = None, method='L-BFGS-B'):
+    def fit(self, X, beta = None, w0 = None, method='L-BFGS-B', max_iter=50):
         """
         Fit FSPSN model on a matrix X.
         :param X: Data matrix. Each row is a observation (cell) and each column is a feature (gene)
@@ -40,24 +40,30 @@ class Fspsn:
         if w0 is None:
             w0 = numpy.ones(d)
 
-        P, beta = self.get_P_and_beta(X)
+        if beta is None:
+            print("Calculating P and beta...")
+            P, beta = self.get_P_and_beta(X)
+        else:
+            if not isinstance(beta, numpy.ndarray):
+                beta = numpy.full(n, beta)
+            print("Calculating P...")
+            P = self.get_Q(X, numpy.ones(d), beta)
 
+        print("Optimizing w...")
+        fun = lambda w: self.loss_(P, self.get_Q(X, w, beta), w)
+        jac = lambda w: self.grad_(P, self.get_Q(X, w, beta), X, beta)
         if method == 'L-BFGS-B':
-            res = minimize(fun=lambda w: self.loss_(P, self.get_Q(X, w, self.beta), w),
-                           x0=w0,
-                            method='L-BFGS-B',
-                            jac=lambda w: self.grad_(P, self.get_Q(X, w, self.beta)),
-                            bounds=[(0, 1) for i in range(d)]
-                           )
+            res = minimize(fun=fun, x0=w0, method='L-BFGS-B', jac=jac, bounds=[(0, 1) for i in range(d)],
+                           options={"maxiter": max_iter, "iprint": 101})
             self.w = res.x
         elif method == 'L-BFGS-Projection':
-            raise NotImplemented("")
+            self.w = self.lbfgsp(fun=fun, x0=w0, jac=jac, eps=self.eps, max_iter=max_iter)
         else:
             raise ValueError("Available optimization methods are L-BFGS-B and L-BFGS-Projection")
 
         return self.w
 
-    def lbfgsp(self, fun, x0, jac, free_var_th = 1e-2, m = 5, max_step = 1.0, c = 0.1, delta = 0.5,
+    def lbfgsp(self, fun, x0, jac, eps = 1e-2, m = 5, max_step = 1.0, c = 0.1, delta = 0.5,
                tol = 1e-6, max_iter = 100, max_armijo_iter=10):
         n = x0.shape[0]
         rec = numpy.empty([max_iter + 1, n])
@@ -79,10 +85,10 @@ class Fspsn:
 
             # Identify restricted and free variables by Eq(10) and Eq(11).
             grad = numpy.squeeze(jac(x))
-            mask0 = numpy.full(m, False)
-            mask1 = numpy.full(m, False)
-            mask0[(x < free_var_th) & (grad > 0.)] = True
-            mask1[(x > 1. - free_var_th) & (grad < 0.)] = True
+            mask0 = numpy.full(n, False)
+            mask1 = numpy.full(n, False)
+            mask0[(x < eps) & (grad > 0.)] = True
+            mask1[(x > 1. - eps) & (grad < 0.)] = True
             mask_free_var = ~(mask0 | mask1)
 
             # Set the restricted variables to the corresponding lower or upper bound (i.e., 0 or 1)
@@ -122,7 +128,7 @@ class Fspsn:
             prev_grad = grad
 
             # Armijo
-            full_d = numpy.zeros(m)
+            full_d = numpy.zeros(n)
             full_d[mask_free_var] = d
             armijo_success_flag = False
             step = max_step
@@ -134,9 +140,11 @@ class Fspsn:
                     step = step * delta
 
             if not armijo_success_flag:
-                warnings.warn("Maximum iteration for Armijo line search is reached.")
+                print("Maximum iteration for Armijo line search is reached.")
 
             x = x + full_d * step
+            x[x < 0.] = 0.
+            x[x > 1.] = 1.
             delta_x[iter_mod_m] = x - prev_x
             if (delta_x[iter_mod_m, :] ** 2).sum() < tol:
                 break
@@ -156,15 +164,17 @@ class Fspsn:
             pass
 
     def loss_(self, P, Q, w):
-        return entropy(P, Q) + self.l1 * numpy.abs(w)
+        return entropy(P, Q, axis=1).sum() + self.l1 * numpy.abs(w).sum()
 
     def grad_(self, P, Q, X, beta):
-        n, d = P, Q
+        n, d = X.shape
         P_Q = P - Q
 
         res = numpy.zeros(d)
         for t in range(d):
             res[t] = (P_Q * numpy.subtract.outer(X[:, t], X[:, t]) * beta.reshape([-1, 1])).sum() + self.l1
+
+        return res
 
     @staticmethod
     def Hbeta(D=numpy.array([]), beta=1.0):
@@ -188,7 +198,9 @@ class Fspsn:
         X = X * w
         sum_X = numpy.sum(numpy.square(X), 1)
         D = numpy.add(numpy.add(-2 * numpy.dot(X, X.T), sum_X).T, sum_X)
-        (H, Q) = Fspsn.Hbeta(D, beta)
+        Q = numpy.zeros((n, n))
+        for i in range(n):
+            (H, Q[i, numpy.concatenate((numpy.r_[0:i], numpy.r_[i + 1:n]))]) = Fspsn.Hbeta(D[i, numpy.concatenate((numpy.r_[0:i], numpy.r_[i + 1:n]))], beta[i])
         return Q
 
     @staticmethod

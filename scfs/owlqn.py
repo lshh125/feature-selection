@@ -466,7 +466,7 @@ class OWLQN(Optimizer):
                     # no use to re-evaluate that function here
                     l1 = 0. # SL: ..
                     for p in self._params: # SL:
-                    l1 = l1 + torch.norm(p, 1) # SL:
+                        l1 = l1 + torch.norm(p, 1) # SL:
                     l1 = l1 * self.param_groups[0]['lasso'] # SL:
                     with torch.enable_grad():
                         loss = float(closure())
